@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package inventory;
+
+service InventoryService {
+  rpc Reserve (InventoryRequest) returns (InventoryResponse);
+  rpc Release (InventoryRequest) returns (InventoryResponse);
+  rpc Commit (InventoryRequest) returns (InventoryResponse);
+}
+
+message InventoryRequest {
+  string operation_id = 1;
+  int32 uid = 2;
+  repeated InventoryItem items = 3;
+}
+
+message InventoryItem {
+  int32 pid = 1;
+  int32 qty = 2;
+}
+
+message InventoryResponse {
+  string operation_id = 1;
+  int32 uid = 2;
+  string status = 3;
+  repeated InventorySnapshot items = 4;
+}
+
+message InventorySnapshot {
+  int32 pid = 1;
+  int32 qty = 2;
+  string unit_price = 3;
+}

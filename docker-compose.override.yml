@@ -1,0 +1,425 @@
+services:
+  # =========================
+  # PostgreSQL initialization
+  # =========================
+
+  auth-init:
+    image: prompt3/auth-service:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: services/auth-service
+    init: true
+    restart: "no"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://auth_user:auth_pass_local@auth-db:5432/auth_db"
+    command: ["node", "scripts/init-db.js"]
+    depends_on:
+      auth-db:
+        condition: service_healthy
+
+  customer-init:
+    image: prompt3/customer-service:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: services/customer-service
+    init: true
+    restart: "no"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://customer_user:customer_pass_local@customer-db:5432/customer_db"
+    command:
+      - sh
+      - -ec
+      - |
+        node scripts/init-db.js
+        node scripts/seed-memberships.js
+    depends_on:
+      customer-db:
+        condition: service_healthy
+
+  order-init:
+    image: prompt3/order-service:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: services/order-service
+    init: true
+    restart: "no"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://order_user:order_pass_local@order-db:5432/order_db"
+    command:
+      - sh
+      - -ec
+      - |
+        node scripts/init-db.js
+        node scripts/init-order-requests.js
+    depends_on:
+      order-db:
+        condition: service_healthy
+
+  # =========================
+  # Product replica set initialization
+  # =========================
+
+  product-db-init:
+    image: mongo:8.0
+    init: true
+    restart: "no"
+    depends_on:
+      product-db:
+        condition: service_started
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        for attempt in {1..60}; do
+          if mongosh "mongodb://product-db:27017/admin?directConnection=true" \
+            --quiet --eval 'quit(db.runCommand({ping: 1}).ok === 1 ? 0 : 1)' \
+            >/dev/null 2>&1; then
+
+            exec mongosh "mongodb://product-db:27017/admin?directConnection=true" \
+              --quiet --eval '
+                let result;
+
+                try {
+                  result = db.adminCommand({replSetGetConfig: 1});
+                } catch (err) {
+                  if (err.code !== 94) {
+                    throw err;
+                  }
+
+                  result = {ok: 0, code: 94};
+                }
+
+                if (result.ok === 1) {
+                  const config = result.config;
+
+                  if (
+                    config._id !== "product-rs" ||
+                    config.members.length !== 1 ||
+                    config.members[0].host !== "product-db:27017"
+                  ) {
+                    throw new Error("Existing replica set configuration does not match");
+                  }
+
+                  print("PASS: Existing product-rs configuration preserved");
+                } else if (result.code === 94) {
+                  const initiated = rs.initiate({
+                    _id: "product-rs",
+                    members: [
+                      {_id: 0, host: "product-db:27017"}
+                    ]
+                  });
+
+                  if (initiated.ok !== 1) {
+                    throw new Error("Replica set initialization failed");
+                  }
+
+                  print("PASS: product-rs initialized");
+                } else {
+                  throw new Error("Cannot read replica set configuration");
+                }
+
+                let ready = false;
+
+                for (let attempt = 0; attempt < 120; attempt++) {
+                  const hello = db.hello();
+
+                  if (
+                    hello.isWritablePrimary === true &&
+                    hello.setName === "product-rs"
+                  ) {
+                    ready = true;
+                    break;
+                  }
+
+                  sleep(1000);
+                }
+
+                if (!ready) {
+                  throw new Error("Timed out waiting for product-rs PRIMARY");
+                }
+
+                print("PASS: product-rs is PRIMARY");
+              '
+          fi
+
+          sleep 2
+        done
+
+        echo "FAIL: Product MongoDB did not become reachable"
+        exit 1
+
+  # =========================
+  # Kafka topic initialization
+  # =========================
+
+  kafka-init:
+    image: apache/kafka:3.9.1
+    init: true
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka:29092 \
+          --create \
+          --if-not-exists \
+          --topic order-created \
+          --partitions 1 \
+          --replication-factor 1
+
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka:29092 \
+          --describe \
+          --topic order-created
+
+        echo "PASS: order-created topic is available"
+
+  # =========================
+  # Auth Service
+  # =========================
+
+  auth-service:
+    image: prompt3/auth-service:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: services/auth-service
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file:
+      - ./services/auth-service/.env
+    environment:
+      NODE_ENV: production
+      GRPC_HOST: "0.0.0.0"
+      GRPC_PORT: "50051"
+      DATABASE_URL: "postgresql://auth_user:auth_pass_local@auth-db:5432/auth_db"
+    depends_on:
+      auth-db:
+        condition: service_healthy
+      auth-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-health.js"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # =========================
+  # Customer Service
+  # =========================
+
+  customer-service:
+    image: prompt3/customer-service:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: services/customer-service
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file:
+      - ./services/customer-service/.env
+    environment:
+      NODE_ENV: production
+      GRPC_HOST: "0.0.0.0"
+      GRPC_PORT: "50052"
+      DATABASE_URL: "postgresql://customer_user:customer_pass_local@customer-db:5432/customer_db"
+      AUTH_GRPC_URL: "auth-service:50051"
+    depends_on:
+      customer-db:
+        condition: service_healthy
+      customer-init:
+        condition: service_completed_successfully
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-health.js"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # =========================
+  # Product Service
+  # =========================
+
+  product-service:
+    image: prompt3/product-service:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: services/product-service
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file:
+      - ./services/product-service/.env
+    environment:
+      NODE_ENV: production
+      GRPC_HOST: "0.0.0.0"
+      GRPC_PORT: "50053"
+      MONGO_URI: "mongodb://product-db:27017/product_db?replicaSet=product-rs&directConnection=true"
+      AUTH_GRPC_URL: "auth-service:50051"
+    depends_on:
+      product-db:
+        condition: service_healthy
+      product-db-init:
+        condition: service_completed_successfully
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-health.js"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # =========================
+  # Order Service
+  # =========================
+
+  order-service:
+    image: prompt3/order-service:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: services/order-service
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - ./services/order-service/.env
+    environment:
+      NODE_ENV: production
+      GRPC_HOST: "0.0.0.0"
+      GRPC_PORT: "50054"
+      DATABASE_URL: "postgresql://order_user:order_pass_local@order-db:5432/order_db"
+      AUTH_GRPC_URL: "auth-service:50051"
+      CUSTOMER_GRPC_URL: "customer-service:50052"
+      PRODUCT_GRPC_URL: "product-service:50053"
+      KAFKA_BROKERS: "kafka:29092"
+    depends_on:
+      order-db:
+        condition: service_healthy
+      order-init:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      auth-service:
+        condition: service_healthy
+      customer-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-health.js"]
+      interval: 15s
+      timeout: 15s
+      retries: 5
+      start_period: 40s
+
+  # =========================
+  # Shipment Service
+  # =========================
+
+  shipment-service:
+    image: prompt3/shipment-service:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: services/shipment-service
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - ./services/shipment-service/.env
+    environment:
+      NODE_ENV: production
+      GRPC_HOST: "0.0.0.0"
+      GRPC_PORT: "50055"
+      MONGO_URI: "mongodb://shipment-db:27017/shipment_db"
+      AUTH_GRPC_URL: "auth-service:50051"
+      KAFKA_BROKERS: "kafka:29092"
+    depends_on:
+      shipment-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-health.js"]
+      interval: 15s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  # =========================
+  # API Gateway
+  # =========================
+
+  api-gateway:
+    image: prompt3/api-gateway:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PATH: api-gateway
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file:
+      - ./api-gateway/.env
+    environment:
+      NODE_ENV: production
+      HOST: "0.0.0.0"
+      PORT: "3000"
+      REDIS_URL: "redis://redis:6379"
+      AUTH_GRPC_URL: "auth-service:50051"
+      CUSTOMER_GRPC_URL: "customer-service:50052"
+      PRODUCT_GRPC_URL: "product-service:50053"
+      ORDER_GRPC_URL: "order-service:50054"
+      SHIPMENT_GRPC_URL: "shipment-service:50055"
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      customer-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      shipment-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-health.js"]
+      interval: 15s
+      timeout: 15s
+      retries: 5
+      start_period: 30s

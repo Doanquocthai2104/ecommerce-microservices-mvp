@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Cau hinh va secret
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test output
+coverage/
+
+# Editor va he dieu hanh
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Private keys
+*.pem
+*.key

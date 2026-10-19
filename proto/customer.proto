@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package customer;
+
+service CustomerService {
+  rpc EnsureProfile (EnsureProfileRequest) returns (CustomerResponse);
+  rpc GetProfile (GetProfileRequest) returns (CustomerResponse);
+  rpc UpdateProfile (UpdateProfileRequest) returns (CustomerResponse);
+  rpc GetMembership (GetProfileRequest) returns (MembershipResponse);
+}
+
+message EnsureProfileRequest {
+  string fullname = 1;
+}
+
+message GetProfileRequest {
+  int32 uid = 1;
+}
+
+message UpdateProfileRequest {
+  int32 uid = 1;
+  optional string fullname = 2;
+  optional int32 mid = 3;
+}
+
+message CustomerResponse {
+  int32 uid = 1;
+  string fullname = 2;
+  int32 mid = 3;
+  string mname = 4;
+  int32 score = 5;
+}
+
+message MembershipResponse {
+  int32 uid = 1;
+  int32 mid = 2;
+  string mname = 3;
+  int32 score = 4;
+}

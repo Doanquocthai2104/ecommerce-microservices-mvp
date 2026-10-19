@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS public."Role" (
+    roleid INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    rolename VARCHAR(50) NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS public."User" (
+    uid INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    roleid INT NOT NULL REFERENCES public."Role"(roleid),
+    email VARCHAR(254) UNIQUE,
+    phone VARCHAR(20)
+);
+
+INSERT INTO public."Role" (rolename)
+VALUES
+    ('CUSTOMER'),
+    ('ADMIN'),
+    ('SHIPMENT_STAFF')
+ON CONFLICT (rolename) DO NOTHING;
