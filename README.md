@@ -1,78 +1,90 @@
 # E-commerce MVP — Microservices
 
-Backend RESTful API cho hệ thống thương mại điện tử MVP, xây dựng bằng Node.js theo kiến trúc Microservices, DDD và Database-per-Service.
+Backend RESTful API cho hệ thống thương mại điện tử MVP, sử dụng Node.js theo kiến trúc Microservices, Domain-Driven Design (DDD) và Database-per-Service.
 
 ## 1. Chức năng
 
-- Đăng ký tài khoản, đăng nhập và cấp JWT.
-- Xác thực và phân quyền CUSTOMER, ADMIN, SHIPMENT_STAFF.
-- Xem và cập nhật hồ sơ khách hàng.
-- Gán hạng thành viên cho khách hàng theo quyền Admin.
-- Đọc score của hạng thành viên để tính giảm giá.
+- Đăng ký tài khoản và đăng nhập.
+- Xác thực JWT và phân quyền theo vai trò.
+- Xem và cập nhật thông tin khách hàng.
+- Quản lý hạng thành viên và đọc score tương ứng.
 - Quản lý sản phẩm và tồn kho.
-- Đặt hàng, tính tiền và lưu Order/OrderDetail.
-- Chống tạo đơn hoặc trừ kho trùng khi gửi lại yêu cầu.
-- Phát sự kiện OrderCreated qua Transactional Outbox và Kafka.
-- Tự động tạo Shipment và cập nhật trạng thái giao hàng.
-- Redis cache thông tin xác thực và rate limiting tại Gateway.
-- Logging, liveness và readiness.
-- Chạy local bằng Docker Compose.
+- Đặt hàng, tính discount theo score.
+- Lưu Order và OrderDetail.
+- Chuyển thông tin đơn hàng sang Shipment qua Kafka.
+- Xem và cập nhật trạng thái giao hàng.
+- Redis cache và rate limiting tại API Gateway.
+- Logging và health check.
+- Dockerize và chạy local bằng Docker Compose.
 
-## 2. Công nghệ và kiến trúc
+## 2. Công nghệ
 
 | Thành phần | Công nghệ |
 |---|---|
-| API Gateway | Node.js, Express, Redis |
-| Auth Service | Node.js, gRPC, PostgreSQL, bcrypt, JWT |
-| Customer Service | Node.js, gRPC, PostgreSQL |
-| Product Service | Node.js, gRPC, MongoDB, Mongoose |
-| Order Service | Node.js, gRPC, PostgreSQL, KafkaJS, decimal.js |
-| Shipment Service | Node.js, gRPC, MongoDB, KafkaJS |
-| Event broker | Apache Kafka |
+| Backend | Node.js 24 |
+| REST API Gateway | Express |
+| Giao tiếp đồng bộ | gRPC |
+| Giao tiếp bất đồng bộ | Apache Kafka |
+| Auth, Customer, Order database | PostgreSQL |
+| Product, Shipment database | MongoDB, Mongoose |
+| Cache và rate limiting | Redis |
+| Xác thực | JWT, bcrypt |
+| Tính toán tiền | decimal.js |
 | Container | Docker, Docker Compose |
 
-Client gọi REST API qua Gateway. Gateway gọi các service bằng gRPC.
+## 3. Kiến trúc
 
-Mỗi service sở hữu database riêng. Các service không truy cập trực tiếp database của nhau trong luồng nghiệp vụ.
+Hệ thống gồm API Gateway và năm microservice:
 
-Order Service lưu Order, OrderDetail và OutboxEvent trong cùng transaction PostgreSQL. Khi việc đặt hàng hoàn tất, Outbox publisher gửi OrderCreated tới Kafka. Shipment Service nhận sự kiện và tạo phiếu giao hàng.
+| Service | Trách nhiệm | Database |
+|---|---|---|
+| API Gateway | Routing, xác thực, phân quyền, JWT validation, rate limiting và logging | Redis |
+| Auth Service | Tài khoản, đăng nhập và JWT | PostgreSQL riêng |
+| Customer Service | Hồ sơ khách hàng, membership và score | PostgreSQL riêng |
+| Product Service | Sản phẩm, tồn kho và inventory reservation | MongoDB riêng |
+| Order Service | Đặt hàng, discount, OrderDetail và Outbox | PostgreSQL riêng |
+| Shipment Service | Nhận OrderCreated và quản lý giao hàng | MongoDB riêng |
 
-Trong từng service, source được tổ chức thành các lớp:
+Client gọi REST API qua Gateway. Gateway giao tiếp với các service bằng gRPC.
 
-- `domain`: quy tắc và đối tượng nghiệp vụ.
+Mỗi microservice sở hữu database riêng. Trong luồng nghiệp vụ, các service trao đổi qua API hoặc sự kiện, không truy cập trực tiếp database của nhau.
+
+Source trong từng service được chia thành bốn lớp:
+
+- `domain`: quy tắc nghiệp vụ.
 - `application`: các use case.
-- `infrastructure`: database, repository và client giao tiếp.
+- `infrastructure`: database, repository và communication clients.
 - `interfaces`: gRPC handlers.
 
-## 3. Cấu trúc dự án
+## 4. Cấu trúc dự án
 
 | Đường dẫn | Nội dung |
 |---|---|
-| `api-gateway/` | REST routes, middleware, Redis và gRPC clients |
-| `services/auth-service/` | Tài khoản, đăng nhập và JWT |
-| `services/customer-service/` | Hồ sơ khách hàng và membership |
-| `services/product-service/` | Sản phẩm và inventory |
+| `api-gateway/` | REST routes, middleware và gRPC clients |
+| `services/auth-service/` | Tài khoản và xác thực |
+| `services/customer-service/` | Khách hàng và membership |
+| `services/product-service/` | Sản phẩm và tồn kho |
 | `services/order-service/` | Đơn hàng, pricing, recovery và Outbox |
 | `services/shipment-service/` | Shipment và Kafka consumer |
 | `proto/` | Các gRPC contract |
-| `shared/` | Thành phần dùng chung cho health check |
-| `Dockerfile` | Dockerfile dùng chung, chọn ứng dụng bằng APP_PATH |
-| `docker-compose.yml` | PostgreSQL, MongoDB, Redis và Kafka |
-| `docker-compose.override.yml` | Sáu ứng dụng và năm service khởi tạo |
+| `shared/` | Thành phần health check dùng chung |
+| `Dockerfile` | Dockerfile dùng chung cho sáu ứng dụng |
+| `docker-compose.yml` | Database, Redis và Kafka |
+| `docker-compose.override.yml` | Các ứng dụng và service khởi tạo |
 
-## 4. Yêu cầu môi trường
+## 5. Yêu cầu môi trường
 
 - Git.
 - Docker Desktop chạy Linux containers.
 - Docker Compose hỗ trợ `up --wait`.
 - Internet cho lần tải image và cài dependencies đầu tiên.
-- Node.js 24 và npm nếu chạy các script kiểm tra trên máy.
+- Node.js 24 và npm nếu chạy script kiểm tra trực tiếp trên máy.
 
-Các cổng local cần được giải phóng trước khi khởi động:
+Các cổng local được sử dụng:
 
 `3000`, `5433`, `5434`, `5435`, `27018`, `27019`, `6380`, `9092`.
 
-## 5. Clone repository
+## 6. Clone repository
 
 ```powershell
 git clone https://github.com/Doanquocthai2104/ecommerce-microservices-mvp.git
@@ -80,82 +92,168 @@ git clone https://github.com/Doanquocthai2104/ecommerce-microservices-mvp.git
 cd ecommerce-microservices-mvp
 ```
 
-## 6. Chuẩn bị cấu hình môi trường
+## 7. Cấu hình môi trường
 
-Mỗi ứng dụng có một `.env.example`.
+Tạo sáu file `.env` tại các vị trí bên dưới.
 
-Chạy đoạn PowerShell sau tại thư mục gốc. Lệnh chỉ tạo `.env` nếu file chưa tồn tại:
+Các file này được Git bỏ qua. Người clone repository cần tự tạo chúng trước khi chạy Docker Compose.
 
-```powershell
-$apps = @(
-  "api-gateway",
-  "services/auth-service",
-  "services/customer-service",
-  "services/product-service",
-  "services/order-service",
-  "services/shipment-service"
-)
+### 7.1. API Gateway
 
-foreach ($app in $apps) {
-  if (-not (Test-Path "$app/.env")) {
-    Copy-Item "$app/.env.example" "$app/.env"
-    Write-Host "Created $app/.env"
-  } else {
-    Write-Host "Preserved existing $app/.env"
-  }
-}
+File: `api-gateway/.env`
+
+```dotenv
+HOST=127.0.0.1
+PORT=3000
+
+AUTH_GRPC_URL=127.0.0.1:50051
+CUSTOMER_GRPC_URL=127.0.0.1:50052
+PRODUCT_GRPC_URL=127.0.0.1:50053
+ORDER_GRPC_URL=127.0.0.1:50054
+SHIPMENT_GRPC_URL=127.0.0.1:50055
+
+REDIS_URL=redis://127.0.0.1:6380
 ```
 
-Thay các giá trị placeholder:
+### 7.2. Auth Service
 
-1. Trong `services/auth-service/.env`, đặt JWT_SECRET bằng một secret ngẫu nhiên có ít nhất 32 ký tự.
-2. Tạo một service key ngẫu nhiên khác.
-3. Đặt cùng service key đó vào ORDER_SERVICE_KEY của Product Service và Order Service.
+File: `services/auth-service/.env`
 
-Nếu có Node.js, có thể chạy lệnh sau để sinh một secret:
+```dotenv
+DATABASE_URL=postgresql://auth_user:auth_pass_local@127.0.0.1:5433/auth_db
+
+GRPC_HOST=127.0.0.1
+GRPC_PORT=50051
+
+JWT_SECRET=REPLACE_WITH_A_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
+```
+
+Thay JWT_SECRET bằng secret ngẫu nhiên có ít nhất 32 ký tự.
+
+### 7.3. Customer Service
+
+File: `services/customer-service/.env`
+
+```dotenv
+DATABASE_URL=postgresql://customer_user:customer_pass_local@127.0.0.1:5434/customer_db
+
+GRPC_HOST=127.0.0.1
+GRPC_PORT=50052
+
+AUTH_GRPC_URL=127.0.0.1:50051
+```
+
+### 7.4. Product Service
+
+File: `services/product-service/.env`
+
+```dotenv
+MONGO_URI=mongodb://127.0.0.1:27018/product_db?replicaSet=product-rs&directConnection=true
+
+GRPC_HOST=127.0.0.1
+GRPC_PORT=50053
+
+AUTH_GRPC_URL=127.0.0.1:50051
+
+ORDER_SERVICE_KEY=REPLACE_WITH_A_RANDOM_SERVICE_KEY_AT_LEAST_32_CHARACTERS
+```
+
+### 7.5. Order Service
+
+File: `services/order-service/.env`
+
+```dotenv
+DATABASE_URL=postgresql://order_user:order_pass_local@127.0.0.1:5435/order_db
+
+GRPC_HOST=127.0.0.1
+GRPC_PORT=50054
+
+AUTH_GRPC_URL=127.0.0.1:50051
+CUSTOMER_GRPC_URL=127.0.0.1:50052
+PRODUCT_GRPC_URL=127.0.0.1:50053
+
+ORDER_SERVICE_KEY=REPLACE_WITH_A_RANDOM_SERVICE_KEY_AT_LEAST_32_CHARACTERS
+
+DISCOUNT_TIERS='[{"minScore":0,"percent":0},{"minScore":100,"percent":5},{"minScore":500,"percent":10},{"minScore":1000,"percent":15}]'
+
+KAFKA_BROKERS=127.0.0.1:9092
+KAFKA_CLIENT_ID=order-service
+```
+
+ORDER_SERVICE_KEY của Product Service và Order Service phải giống nhau.
+
+Giữ DISCOUNT_TIERS trên một dòng trong file.
+
+### 7.6. Shipment Service
+
+File: `services/shipment-service/.env`
+
+```dotenv
+MONGO_URI=mongodb://127.0.0.1:27019/shipment_db
+
+GRPC_HOST=127.0.0.1
+GRPC_PORT=50055
+
+AUTH_GRPC_URL=127.0.0.1:50051
+
+KAFKA_BROKERS=127.0.0.1:9092
+KAFKA_CLIENT_ID=shipment-service
+KAFKA_GROUP_ID=shipment-service-v1
+```
+
+### 7.7. Sinh secret
+
+Nếu máy có Node.js, chạy:
 
 ```powershell
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Chạy hai lần để có hai giá trị riêng: một JWT secret và một service key.
+Chạy hai lần để tạo:
 
-Các tài khoản PostgreSQL trong Compose là cấu hình cho môi trường local của bài tập.
+1. Một giá trị cho JWT_SECRET.
+2. Một giá trị khác dùng chung cho ORDER_SERVICE_KEY của Product và Order.
 
-Không commit file `.env` hoặc secret thật lên GitHub.
+Không sử dụng nguyên giá trị placeholder và không commit secret thật lên GitHub.
 
-Compose đọc `.env` của từng ứng dụng, sau đó ghi đè địa chỉ kết nối bằng tên service trong mạng Docker.
+Địa chỉ `127.0.0.1` trong các file trên phục vụ chạy Node trực tiếp trên máy. Khi chạy Docker, Compose ghi đè bằng tên service trong mạng container.
 
-## 7. Build và khởi động
+Tài khoản PostgreSQL trong Compose là cấu hình dành cho môi trường local của bài tập.
 
-Chạy Docker Desktop, sau đó chạy tại thư mục gốc:
+## 8. Build và khởi động
+
+Mở Docker Desktop và chạy tại thư mục gốc:
 
 ```powershell
 docker compose config --quiet
+```
 
+Build image:
+
+```powershell
 docker compose build
 ```
 
-Nếu build thành công:
+Sau khi build thành công:
 
 ```powershell
 docker compose up -d --wait --wait-timeout 360 api-gateway
 ```
 
-Gateway kéo theo toàn bộ dependency cần thiết.
+Gateway kéo theo các dependency đã khai báo.
 
-Hệ thống tự thực hiện:
+Hệ thống tự động:
 
-- Khởi tạo bảng và role trong Auth database.
+- Khởi tạo Auth database và seed ba role.
 - Khởi tạo Customer database và seed membership.
 - Khởi tạo Order, OrderDetail, OutboxEvent và OrderRequest.
-- Khởi tạo Product replica set `product-rs` nếu chưa có.
+- Khởi tạo MongoDB replica set `product-rs` nếu chưa có.
 - Tạo Kafka topic `order-created` nếu chưa có.
 - Khởi động sáu ứng dụng.
 
-Không cần mở riêng các server bằng `node src/server.js` khi đang chạy bằng Docker.
+Không cần chạy riêng `node src/server.js` khi hệ thống đang chạy bằng Docker.
 
-## 8. Kiểm tra container
+## 9. Kiểm tra trạng thái
 
 ```powershell
 docker compose ps -a
@@ -163,47 +261,47 @@ docker compose ps -a
 
 Kết quả mong đợi:
 
-- 13 container chạy lâu dài ở trạng thái healthy.
-- Năm container khởi tạo ở trạng thái Exited (0).
+- 13 container chạy lâu dài ở trạng thái `healthy`.
+- Năm container khởi tạo ở trạng thái `Exited (0)`.
 
-Các container khởi tạo:
+Năm container khởi tạo gồm:
 
-- auth-init
-- customer-init
-- order-init
-- product-db-init
-- kafka-init
+- `auth-init`
+- `customer-init`
+- `order-init`
+- `product-db-init`
+- `kafka-init`
 
-Exited (0) nghĩa là script khởi tạo đã hoàn thành thành công.
+`Exited (0)` nghĩa là tác vụ khởi tạo đã hoàn thành thành công.
 
-## 9. Kiểm tra sức khỏe
+## 10. Health check
 
-Gateway REST API:
+Gateway chạy tại:
 
 `http://127.0.0.1:3000`
 
-Kiểm tra liveness:
+### Liveness
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:3000/api/live
 ```
 
-Kiểm tra readiness tổng hợp:
+### Readiness tổng hợp
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:3000/api/health |
   ConvertTo-Json -Depth 5
 ```
 
-Kết quả bình thường:
+Khi hệ thống sẵn sàng:
 
-- HTTP 200.
+- HTTP status là `200`.
 - `status` là `UP`.
 - Gateway, Redis và năm service đều `UP`.
 
-Khi một dependency bắt buộc không sẵn sàng, readiness trả HTTP 503. Liveness vẫn phản ánh tiến trình Gateway còn hoạt động.
+Khi dependency bắt buộc không sẵn sàng, readiness trả `503`. Liveness vẫn phản ánh tiến trình Gateway còn hoạt động.
 
-Có thể chạy script kiểm tra trên máy sau khi cài dependencies của Gateway:
+Có thể chạy script kiểm tra trên máy:
 
 ```powershell
 npm ci --prefix api-gateway
@@ -211,9 +309,9 @@ npm ci --prefix api-gateway
 node api-gateway/scripts/check-health.js
 ```
 
-## 10. REST API
+## 11. REST API
 
-| Method | Endpoint | Quyền |
+| Method | Endpoint | Quyền truy cập |
 |---|---|---|
 | POST | `/api/auth/register` | Không cần JWT |
 | POST | `/api/auth/login` | Không cần JWT |
@@ -225,7 +323,7 @@ node api-gateway/scripts/check-health.js
 | PUT | `/api/products/:pid` | Admin |
 | DELETE | `/api/products/:pid` | Admin |
 | POST | `/api/orders` | Customer |
-| GET | `/api/orders` | Customer/Admin, lấy danh sách của tài khoản hiện tại |
+| GET | `/api/orders` | Customer/Admin, lấy đơn của tài khoản hiện tại |
 | GET | `/api/orders/:oid` | Customer sở hữu đơn hoặc Admin |
 | GET | `/api/shipments/:shipid` | Customer sở hữu Shipment, Admin hoặc Shipment Staff |
 | PATCH | `/api/shipments/:shipid/status` | Admin hoặc Shipment Staff |
@@ -233,25 +331,34 @@ node api-gateway/scripts/check-health.js
 
 Endpoint bổ sung `/api/live` dùng để kiểm tra liveness.
 
-Các API cần xác thực sử dụng header:
+API cần xác thực sử dụng header:
 
 ```http
 Authorization: Bearer <accessToken>
 ```
 
-Đăng ký công khai luôn tạo tài khoản CUSTOMER. API đăng ký không cho người dùng tự chọn quyền Admin hoặc Shipment Staff.
+Đăng ký công khai luôn tạo tài khoản CUSTOMER. Người dùng không được tự chọn role Admin hoặc Shipment Staff qua API đăng ký.
 
-## 11. Đặt hàng và idempotency
+## 12. Luồng đặt hàng
 
-POST `/api/orders` yêu cầu:
+1. Customer gửi JWT, Idempotency-Key và danh sách sản phẩm.
+2. Backend xác định UID từ danh tính đã xác thực.
+3. Order Service đọc membership score từ Customer Service.
+4. Product Service giữ tồn kho và trả về giá sản phẩm tại thời điểm đặt hàng.
+5. Order Service tính subtotal, discount và total.
+6. Order, OrderDetail, OutboxEvent và trạng thái request được lưu trong cùng transaction PostgreSQL.
+7. Inventory được commit và request hoàn tất.
+8. Outbox publisher gửi OrderCreated tới Kafka.
+9. Shipment consumer nhận sự kiện và tạo Shipment PENDING.
+
+Request mẫu:
 
 ```http
+POST /api/orders
 Authorization: Bearer <accessToken>
 Idempotency-Key: <UUID>
 Content-Type: application/json
 ```
-
-Request body:
 
 ```json
 {
@@ -264,19 +371,20 @@ Request body:
 }
 ```
 
-- Client gửi PID và số lượng.
-- Backend lấy UID từ danh tính đã xác thực.
-- Backend lấy giá từ Product và score từ Customer.
-- Client không được tự gửi UID, đơn giá hoặc discount.
-- Gửi lại cùng key và cùng sản phẩm trả về đơn hàng đã tạo.
+Client gửi PID và số lượng. UID, đơn giá và discount được xác định ở backend.
+
+### Idempotency
+
+- Gửi lại cùng key và cùng nội dung trả về đơn đã tạo.
 - Dùng lại key với nội dung khác bị từ chối.
-- Các thao tác inventory có cơ chế chống xử lý trùng.
+- Gửi lại yêu cầu không trừ kho hoặc tạo Shipment lần nữa.
+- Shipment xử lý sự kiện trùng mà không tạo thêm phiếu giao hàng.
 
-Shipment được tạo bất đồng bộ qua Kafka. Nếu chưa có Shipment trong thời gian Gateway chờ, trường `shipment` có thể là `null`. Client có thể đọc lại chi tiết đơn hàng sau đó.
+Shipment được tạo bất đồng bộ. Nếu chưa có Shipment trong thời gian Gateway chờ, trường `shipment` có thể là `null`. Client có thể đọc lại chi tiết đơn hàng sau đó.
 
-## 12. Membership và discount
+## 13. Membership và discount
 
-Cấu hình mẫu:
+Cấu hình MVP hiện tại:
 
 | Membership | Score | Discount |
 |---|---:|---:|
@@ -285,31 +393,39 @@ Cấu hình mẫu:
 | GOLD | 500 | 10% |
 | PLATINUM | 1000 | 15% |
 
-Các mức trên là cấu hình MVP của dự án.
-
-- Membership được seed trong Customer database.
-- Discount tiers được cấu hình bằng DISCOUNT_TIERS của Order Service.
-- Customer không tự sửa membership hoặc score.
+- Customer mới nhận membership BASIC.
 - Admin có thể gán membership đã tồn tại.
-- Score hiện được đọc từ membership, chưa có cơ chế tự tích điểm theo đơn hàng.
+- Customer không tự sửa membership hoặc score.
+- Score được đọc từ membership, chưa có chức năng tự tích điểm theo đơn hàng.
+- Discount được tính theo DISCOUNT_TIERS của Order Service.
+- Tiền sử dụng decimal.js và làm tròn HALF_UP tới hai chữ số thập phân.
 - Đơn hàng đã lưu giữ nguyên số tiền khi membership thay đổi.
 
-## 13. Trạng thái Shipment
+## 14. Trạng thái Shipment
 
-Các chuyển trạng thái được hỗ trợ:
+Các trạng thái:
 
-- PENDING sang SHIPPING hoặc CANCELLED.
-- SHIPPING sang DELIVERED hoặc CANCELLED.
+- `PENDING`
+- `SHIPPING`
+- `DELIVERED`
+- `CANCELLED`
+
+Quy tắc chuyển trạng thái:
+
+- PENDING → SHIPPING hoặc CANCELLED.
+- SHIPPING → DELIVERED hoặc CANCELLED.
 - DELIVERED và CANCELLED là trạng thái kết thúc.
 - Cập nhật lại cùng trạng thái trả về trạng thái hiện có.
 
-CANCELLED ở đây là trạng thái giao hàng. Chức năng này không thực hiện hủy Order hoặc hoàn lại tồn kho của đơn đã hoàn tất.
+Chỉ Admin hoặc Shipment Staff được cập nhật trạng thái.
 
-## 14. Cổng kết nối local
+CANCELLED là trạng thái giao hàng. Chức năng này không hủy Order hoặc hoàn lại tồn kho của đơn đã hoàn tất.
 
-| Thành phần | Địa chỉ trên máy |
+## 15. Cổng kết nối local
+
+| Thành phần | Địa chỉ |
 |---|---|
-| Gateway | `127.0.0.1:3000` |
+| API Gateway | `127.0.0.1:3000` |
 | Auth PostgreSQL | `127.0.0.1:5433` |
 | Customer PostgreSQL | `127.0.0.1:5434` |
 | Order PostgreSQL | `127.0.0.1:5435` |
@@ -318,31 +434,35 @@ CANCELLED ở đây là trạng thái giao hàng. Chức năng này không thự
 | Redis | `127.0.0.1:6380` |
 | Kafka external listener | `127.0.0.1:9092` |
 
-Các service gRPC dùng cổng 50051–50055 trong mạng Docker và không publish ra máy.
+Các service gRPC dùng cổng 50051–50055 trong mạng Docker, không publish ra máy.
 
-Script gRPC muốn chạy từ máy cần cấu hình publish cổng riêng hoặc chạy trong container với địa chỉ phù hợp.
+Script kiểm tra gRPC chạy từ máy cần cấu hình publish cổng riêng hoặc chạy trong container với địa chỉ phù hợp.
 
-## 15. Xem log và xử lý lỗi
+## 16. Xem log
 
 ```powershell
 docker compose logs --tail 100 api-gateway
+```
 
+```powershell
 docker compose logs --tail 100 order-service shipment-service
+```
 
+```powershell
 docker compose logs --tail 100 auth-init customer-init order-init product-db-init kafka-init
 ```
 
-Nếu Gateway không khởi động:
+Khi có lỗi khởi động:
 
-1. Kiểm tra cổng 3000 có đang bị server Node khác sử dụng.
-2. Kiểm tra `.env` của sáu ứng dụng đã tồn tại.
-3. Kiểm tra JWT_SECRET và ORDER_SERVICE_KEY đã được cấu hình.
+1. Kiểm tra đủ sáu file `.env`.
+2. Kiểm tra JWT_SECRET và ORDER_SERVICE_KEY.
+3. Kiểm tra cổng local có bị chương trình khác sử dụng.
 4. Kiểm tra năm init có kết thúc mã 0.
-5. Xem log service đang unhealthy.
+5. Đọc log service đang unhealthy.
 
-Kafka và Shipment consumer có thể cần thêm thời gian kết nối hoặc tham gia lại consumer group sau khi Kafka khởi động lại.
+Sau khi Kafka khởi động lại, Shipment consumer có thể cần thêm thời gian tham gia lại consumer group trước khi readiness trở về UP.
 
-## 16. Dừng và chạy lại
+## 17. Dừng và chạy lại
 
 Tạm dừng:
 
@@ -362,27 +482,31 @@ Gỡ container và network, giữ named volume:
 docker compose down
 ```
 
-Dữ liệu database nằm trong named volume. Tùy chọn `down -v` xóa các volume của project, vì vậy không dùng nếu muốn giữ dữ liệu.
+Dữ liệu nằm trong named volume. Không dùng `docker compose down -v` nếu muốn giữ dữ liệu.
 
-## 17. Cập nhật source
-
-Sau khi thay đổi source, build và chạy lại:
+## 18. Cập nhật sau khi sửa source
 
 ```powershell
 docker compose build
+```
 
+```powershell
 docker compose up -d --wait --wait-timeout 360 api-gateway
 ```
 
-## 18. Phạm vi kiểm tra đã thực hiện
+## 19. Kiểm tra đã thực hiện
 
-- Kiểm tra repository, application service, gRPC và REST theo từng chức năng.
-- Kiểm tra JWT và quyền truy cập.
-- Kiểm tra inventory transaction, chống oversell và idempotency.
-- Kiểm tra Outbox, Kafka consumer và event trùng.
-- Kiểm tra luồng đặt hàng đến tạo Shipment trên Docker.
-- Kiểm tra discount của các membership.
-- Kiểm tra health khi database, Redis hoặc Kafka dừng và phục hồi.
-- Kiểm tra khởi tạo hệ thống trên volume trống bằng Compose project riêng.
+Các kết quả kiểm tra trong quá trình xây dựng gồm:
 
-Bảng đối chiếu nghiệm thu theo 25 test case của tài liệu thiết kế được tổng hợp riêng.
+- Đăng ký, đăng nhập, JWT và phân quyền.
+- Customer, membership và discount.
+- Product CRUD và inventory transaction.
+- Chống oversell, xử lý đồng thời và idempotency.
+- Order transaction, recovery và Outbox.
+- Kafka producer/consumer và xử lý event trùng hoặc không hợp lệ.
+- Shipment gRPC và REST API.
+- Luồng đặt hàng đến tạo Shipment trên Docker.
+- Health check khi dependency dừng và phục hồi.
+- Khởi tạo tự động bằng Compose project riêng với volume trống.
+
+Bảng đối chiếu nghiệm thu theo 25 test case của tài liệu thiết kế chưa được tổng hợp trong repository.
